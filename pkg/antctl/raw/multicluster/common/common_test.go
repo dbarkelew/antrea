@@ -429,3 +429,169 @@ func TestCreateMemberToken(t *testing.T) {
 		})
 	}
 }
+
+func TestDeleteMemberToken(t *testing.T) {
+	secretContent := []byte(`apiVersion: v1
+kind: Secret
+metadata:
+  name: default-member-token
+data:
+  ca.crt: YWJjZAo=
+  namespace: ZGVmYXVsdAo=
+  token: YWJjZAo=
+type: Opaque`)
+	existingSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "default-member-token",
+			Annotations: map[string]string{
+				CreateByAntctlAnnotation: "true",
+			},
+		},
+		Data: map[string][]byte{"token": secretContent},
+	}
+
+	existingSecret1 := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "default-member-token-1",
+			Annotations: map[string]string{
+				CreateByAntctlAnnotation: "true",
+			},
+		},
+		Data: map[string][]byte{"token": secretContent},
+	}
+
+	existingRolebinding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "default-member-token",
+			Annotations: map[string]string{
+				CreateByAntctlAnnotation: "true",
+			},
+		},
+	}
+
+	existingRolebinding1 := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "default-member-token-notexist",
+			Annotations: map[string]string{
+				CreateByAntctlAnnotation: "true",
+			},
+		},
+	}
+
+	existingServiceAccount := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "default-member-token",
+			Annotations: map[string]string{
+				CreateByAntctlAnnotation: "true",
+			},
+		},
+	}
+
+	existingServiceAccount1 := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "default-member-token-notexist",
+			Annotations: map[string]string{
+				CreateByAntctlAnnotation: "true",
+			},
+		},
+	}
+
+	tests := []struct {
+		name                 string
+		namespace            string
+		tokeName             string
+		serviceAccount       *corev1.ServiceAccount
+		rolebinding          *rbacv1.RoleBinding
+		secret               *corev1.Secret
+		numsOfServiceAccount int
+		numsOfRolebinding    int
+		numsOfSecret         int
+		expectedOutput       string
+	}{
+		{
+			name:                 "delete successfully",
+			tokeName:             "default-member-token",
+			namespace:            "default",
+			secret:               existingSecret,
+			rolebinding:          existingRolebinding,
+			serviceAccount:       existingServiceAccount,
+			numsOfServiceAccount: 0,
+			numsOfRolebinding:    0,
+			numsOfSecret:         0,
+			expectedOutput:       "",
+		},
+		{
+			name:                 "failed to delete because of wrong secret name",
+			tokeName:             "default-member-token",
+			namespace:            "default",
+			secret:               existingSecret1,
+			rolebinding:          existingRolebinding,
+			serviceAccount:       existingServiceAccount,
+			numsOfSecret:         1,
+			numsOfRolebinding:    0,
+			numsOfServiceAccount: 0,
+			expectedOutput:       "Failed to find Secret",
+		},
+		{
+			name:                 "failed to delete because of wrong rolebinding name",
+			tokeName:             "default-member-token",
+			namespace:            "default",
+			secret:               existingSecret,
+			rolebinding:          existingRolebinding1,
+			serviceAccount:       existingServiceAccount,
+			numsOfSecret:         0,
+			numsOfRolebinding:    1,
+			numsOfServiceAccount: 0,
+			expectedOutput:       "Failed to find RoleBinding",
+		},
+		{
+			name:                 "failed to delete because of wrong serviceaccount name",
+			tokeName:             "default-member-token",
+			namespace:            "default",
+			secret:               existingSecret,
+			rolebinding:          existingRolebinding,
+			serviceAccount:       existingServiceAccount1,
+			numsOfSecret:         0,
+			numsOfRolebinding:    0,
+			numsOfServiceAccount: 1,
+			expectedOutput:       "Failed to find ServiceAccount",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := &cobra.Command{}
+			fakeClient := fake.NewClientBuilder().WithScheme(multiclusterscheme.Scheme).WithObjects(tt.secret, tt.rolebinding, tt.serviceAccount).Build()
+			buf := new(bytes.Buffer)
+			cmd.SetOutput(buf)
+			cmd.SetOut(buf)
+			cmd.SetErr(buf)
+
+			err := DeleteMemberToken(cmd, fakeClient, tt.tokeName, tt.namespace)
+
+			if err != nil {
+				log.Fatal(err)
+			}
+			if tt.name == "delete successfully" {
+				assert.Equal(t, tt.expectedOutput, buf.String())
+			} else {
+				assert.Contains(t, buf.String(), tt.expectedOutput)
+			}
+			remainSecrets := &corev1.SecretList{}
+			fakeClient.List(context.Background(), remainSecrets, &client.ListOptions{})
+			assert.Equal(t, tt.numsOfSecret, len(remainSecrets.Items))
+			remainRoleBinding := &rbacv1.RoleBindingList{}
+			fakeClient.List(context.Background(), remainRoleBinding, &client.ListOptions{})
+			assert.Equal(t, tt.numsOfRolebinding, len(remainRoleBinding.Items))
+			remainServiceAccount := &corev1.ServiceAccountList{}
+			fakeClient.List(context.Background(), remainServiceAccount, &client.ListOptions{})
+			assert.Equal(t, tt.numsOfServiceAccount, len(remainServiceAccount.Items))
+		})
+	}
+}

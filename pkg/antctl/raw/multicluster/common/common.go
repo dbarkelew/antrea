@@ -34,6 +34,7 @@ import (
 
 	multiclusterv1alpha1 "antrea.io/antrea/multicluster/apis/multicluster/v1alpha1"
 	multiclusterv1alpha2 "antrea.io/antrea/multicluster/apis/multicluster/v1alpha2"
+	"antrea.io/antrea/pkg/antctl/output"
 	"antrea.io/antrea/pkg/antctl/raw"
 	multiclusterscheme "antrea.io/antrea/pkg/antctl/raw/multicluster/scheme"
 )
@@ -299,6 +300,100 @@ func CreateMemberToken(cmd *cobra.Command, k8sClient client.Client, name string,
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Member token saved to %s\n", file.Name())
+
+	return nil
+}
+
+func GetMemberToken(cmd *cobra.Command, k8sClient client.Client, name string, namespace string, file *os.File) error {
+	secret := &corev1.Secret{}
+	if err := k8sClient.Get(context.TODO(), types.NamespacedName{Name: name, Namespace: namespace}, secret); err != nil {
+		return err
+	}
+
+	if secret.Annotations[CreateByAntctlAnnotation] == "true" {
+		s := &corev1.Secret{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: "v1",
+				Kind:       "Secret",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name,
+			},
+			Data: secret.Data,
+			Type: corev1.SecretTypeOpaque,
+		}
+		if file != nil {
+			b, err := yaml.Marshal(s)
+			if err != nil {
+				return err
+			}
+			if _, err := file.Write([]byte("---\n")); err != nil {
+				return err
+			}
+			if _, err := file.Write(b); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Member token saved to %s\n", file.Name())
+		} else {
+			output.YamlOutput(s, cmd.OutOrStdout())
+		}
+	}
+
+	return nil
+}
+
+func DeleteMemberToken(cmd *cobra.Command, k8sClient client.Client, name string, namespace string) error {
+	secret := &corev1.Secret{}
+	getErr := k8sClient.Get(context.TODO(), types.NamespacedName{Namespace: namespace, Name: name}, secret)
+	if getErr != nil {
+		fmt.Fprintf(cmd.OutOrStderr(), "Failed to find Secret \"%s\", error: %s\n", name, getErr)
+	}
+	if secret.Annotations[CreateByAntctlAnnotation] == "true" {
+		deleteErr := k8sClient.Delete(context.TODO(), &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: namespace,
+				Name:      name,
+			}}, &client.DeleteOptions{})
+		if deleteErr != nil {
+			fmt.Fprintf(cmd.OutOrStderr(), "Failed to delete Secret \"%s\", error: %s\n", name, deleteErr)
+		}
+	}
+
+	roleBinding := &rbacv1.RoleBinding{}
+	getErr = k8sClient.Get(context.TODO(), types.NamespacedName{Namespace: namespace, Name: name}, roleBinding)
+	if getErr != nil {
+		fmt.Fprintf(cmd.OutOrStderr(), "Failed to find RoleBinding \"%s\", error: %s\n", name, getErr)
+	}
+	if roleBinding.Annotations[CreateByAntctlAnnotation] == "true" {
+		deleteErr := k8sClient.Delete(context.TODO(), &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: namespace,
+				Name:      name,
+			}}, &client.DeleteOptions{})
+
+		if deleteErr != nil {
+			fmt.Fprintf(cmd.OutOrStderr(), "Failed to delete RoleBinding \"%s\", error: %s\n", name, deleteErr)
+		}
+	}
+
+	serviceAccount := &corev1.ServiceAccount{}
+	getErr = k8sClient.Get(context.TODO(), types.NamespacedName{Namespace: namespace, Name: name}, serviceAccount)
+	if getErr != nil {
+		fmt.Fprintf(cmd.OutOrStderr(), "Failed to find ServiceAccount \"%s\", error: %s\n", name, getErr)
+	}
+	if serviceAccount.Annotations[CreateByAntctlAnnotation] == "true" {
+		deleteErr := k8sClient.Delete(context.TODO(), &corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: namespace,
+				Name:      name,
+				Annotations: map[string]string{
+					CreateByAntctlAnnotation: "true",
+				}}}, &client.DeleteOptions{})
+
+		if deleteErr != nil {
+			fmt.Fprintf(cmd.OutOrStderr(), "Failed to delete ServiceAccount \"%s\", error: %s\n", name, deleteErr)
+		}
+	}
 
 	return nil
 }
