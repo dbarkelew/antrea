@@ -21,7 +21,7 @@ function echoerr {
 }
 
 CLUSTER=""
-REGION="us-east-2"
+REGION="us-west-2"
 K8S_VERSION="1.21"
 AWS_NODE_TYPE="t3.medium"
 SSH_KEY_PATH="$HOME/.ssh/id_rsa.pub"
@@ -34,6 +34,8 @@ MODE="report"
 TEST_SCRIPT_RC=0
 KUBE_CONFORMANCE_IMAGE_VERSION=auto
 INSTALL_EKSCTL=true
+AWS_ROLE_ARN=""
+AWS_SOURCE_PROFILE=""
 
 _usage="Usage: $0 [--cluster-name <EKSClusterNameToUse>] [--kubeconfig <KubeconfigSavePath>] [--k8s-version <ClusterVersion>]\
                   [--aws-access-key <AccessKey>] [--aws-secret-key <SecretKey>] [--aws-region <Region>] [--ssh-key <SSHKey] \
@@ -46,6 +48,8 @@ Setup a EKS cluster to run K8s e2e community tests (Conformance & Network Policy
         --k8s-version            GKE K8s cluster version. Defaults to 1.17.
         --aws-access-key         AWS Acess Key for logging in to awscli.
         --aws-secret-key         AWS Secret Key for logging in to awscli.
+        --aws-service-user-arn   AWS Role Name for logging in to awscli.
+        --aws-service-user       AWS Source Profile for logging in to awscli.
         --aws-region             The AWS region where the cluster will be initiated. Defaults to us-east-2.
         --ssh-key                The path of key to be used for ssh access to worker nodes.
         --log-mode               Use the flag to set either 'report', 'detail', or 'dump' level data for sonobouy results.
@@ -76,6 +80,14 @@ case $key in
     ;;
     --aws-secret-key)
     AWS_SECRET_KEY="$2"
+    shift 2
+    ;;
+    --aws-service-user-arn)
+    AWS_ROLE_ARN="$2"
+    shift 2
+    ;;
+    --aws-service-user)
+    AWS_SOURCE_PROFILE="$2"
     shift 2
     ;;
     --aws-region)
@@ -173,12 +185,39 @@ function setup_eks() {
     aws --version
 
     set +e
-    aws configure << EOF
-${AWS_ACCESS_KEY}
-${AWS_SECRET_KEY}
-${REGION}
-JSON
+    if [[ "$AWS_ROLE_ARN" != "" ]] && [[ "$AWS_SOURCE_PROFILE" != "" ]]; then
+        echo > .aws/config <<EOF
+
+[default]
+region = $REGION
+role_arn = $AWS_ROLE_ARN
+source_profile = $AWS_SOURCE_PROFILE
+output = JSON
 EOF
+        echo > .aws/credntials <<EOF
+
+[$AWS_SOURCE_PROFILE]
+aws_access_key_id = $AWS_ACCESS_KEY
+aws_secret_access_key = $AWS_SECRET_KEY
+EOF    
+    elif [[ "$AWS_ROLE_ARN" = "" ]] && [[ "$AWS_SOURCE_PROFILE" = "" ]]; then
+        echo > .aws/config <<EOF
+
+[default]
+region = $REGION
+output = JSON
+EOF
+        echo > .aws/credentials <<EOF
+
+[default]
+aws_access_key_id = $AWS_ACCESS_KEY
+aws_secret_access_key = $AWS_SECRET_KEY
+EOF
+    else
+        echo "Invalid input either specify both role_arn and source_profile or none."
+        exit 0
+    fi
+
     if [[ "$INSTALL_EKSCTL" == true ]]; then
         echo "=== Installing latest version of eksctl ==="
         curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
